@@ -1,0 +1,7 @@
+{
+  "name": "Photos Wall 3D",
+  "description": "An interactive 3D photo wall that follows human movements and zooms into random photos when arms are spread, powered by MediaPipe Pose.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
