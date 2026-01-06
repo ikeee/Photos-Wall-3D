@@ -1,20 +1,46 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Photos Wall 3D (3D 互动照片墙)
 
-# Run and deploy your AI Studio app
+这是一个专为学校公共区域（如架空层、大堂）的大型 LED 屏幕设计的互动视觉应用。它利用摄像头捕捉学生的动作，使照片墙能够实时感知人体位置并进行 3D 互动，为校园生活增添科技感与趣味性。
 
-This contains everything you need to run your app locally.
+## 🌟 核心功能
 
-View your app in AI Studio: https://ai.studio/apps/drive/1k-MXR3THcdqBJ4kn30r5iiiRKAycTtBZ
+- **3D 沉浸式排列**：照片以球体形式在 3D 空间中分布，支持平滑的旋转与深度感。
+- **人体位置追踪**：集成 **MediaPipe Pose** 算法，照片墙会跟随摄像头前学生的位置进行偏转，产生“智能对焦”的跟随效果。
+- **手势触发特写**：
+  - 当学生在屏幕前**张开双臂**（呈“大”字形或 T 字姿态）时。
+  - 系统会自动触发“随机抽选”机制。
+  - 被选中的照片会从墙中飞出，放大并悬浮在屏幕中心，并伴有青色脉冲发光效果。
+- **科幻风格 UI**：
+  - 实时 HUD 仪表盘展示人体骨骼追踪状态。
+  - 动态背景粒子与星空效果。
+  - 适配大屏幕的超高清视觉设计。
 
-## Run Locally
+## 🛠️ 技术栈
 
-**Prerequisites:**  Node.js
+- **前端框架**：React 19
+- **3D 渲染**：Three.js + @react-three/fiber + @react-three/drei
+- **AI 视觉**：MediaPipe Pose (人体姿态估计)
+- **样式处理**：Tailwind CSS
+- **交互逻辑**：自定义姿态判定算法 (utils/poseUtils.ts)
 
+## 🎮 互动指南
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. **进入感应区**：走到摄像头能够拍摄到的位置，系统会自动锁定目标（底部的 "TARGET LOCK" 会亮起）。
+2. **操控方向**：你左右或上下移动，照片墙会随你的身体重心实时旋转。
+3. **查看特写**：张开你的双臂，保持一秒钟。系统会捕捉到这个动作，并为你随机放大一张精彩的照片。
+4. **自动回归**：特写照片会在 5 秒后自动飞回原位，照片墙恢复自由旋转。
+
+## 🚀 部署与优化
+
+- **分辨率适配**：应用采用响应式 3D 渲染，可自动适配学校 4K 或超宽 LED 屏幕。
+- **性能优化**：
+  - 使用了 MediaPipe 的 `modelComplexity: 1` 兼顾精度与帧率。
+  - 开启了 `dpr={[1, 2]}` 确保在高分屏下的渲染清晰度。
+- **离线支持**：通过 CDN 引入依赖，但在部署环境建议缓存 MediaPipe 模型文件。
+
+## 📂 目录结构
+
+- `App.tsx`: 主程序逻辑，包含摄像头初始化与状态管理。
+- `components/PhotoWall.tsx`: 处理照片在 3D 空间中的球体布局与跟随逻辑。
+- `components/PhotoCard.tsx`: 单张照片的渲染组件，负责放大动画与发光特效。
+- `utils/poseUtils.ts`: 包含姿态计算逻辑，如重心偏移计算与“张开双臂”动作判定。
