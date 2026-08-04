@@ -1,11 +1,11 @@
-
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Photos Wall 3D</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 本地化 Tailwind（离线可用，避免 CDN 运行时编译开销） -->
+  <script src="/vendor/tailwind.min.js"></script>
   <style>
     body {
       margin: 0;
@@ -22,22 +22,9 @@
       display: block;
     }
   </style>
-<script type="importmap">
-{
-  "imports": {
-    "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.5.0",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "@react-three/drei": "https://esm.sh/@react-three/drei@^10.7.7",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "three": "https://esm.sh/three@^0.182.0",
-    "@mediapipe/camera_utils": "https://esm.sh/@mediapipe/camera_utils@^0.3.1675466862",
-    "@mediapipe/pose": "https://esm.sh/@mediapipe/pose@^0.5.1675469404"
-  }
-}
-</script>
 </head>
 <body>
   <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
 </body>
 </html>

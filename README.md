@@ -1,46 +1,91 @@
-# Photos Wall 3D (3D 互动照片墙)
+# Photos Wall 3D（3D 互动照片墙）
 
-这是一个专为学校公共区域（如架空层、大堂）的大型 LED 屏幕设计的互动视觉应用。它利用摄像头捕捉学生的动作，使照片墙能够实时感知人体位置并进行 3D 互动，为校园生活增添科技感与趣味性。
+面向学校公共区域（架空层、大堂）大型 LED 屏的互动视觉应用：摄像头捕捉人体动作，照片墙实时跟随并响应手势。
 
-## 🌟 核心功能
+**部署目标：OrangePi 5 Pro（RK3588S / Mali-G610 / 4GB）弱机优化版。**
 
-- **3D 沉浸式排列**：照片以球体形式在 3D 空间中分布，支持平滑的旋转与深度感。
-- **人体位置追踪**：集成 **MediaPipe Pose** 算法，照片墙会跟随摄像头前学生的位置进行偏转，产生“智能对焦”的跟随效果。
-- **手势触发特写**：
-  - 当学生在屏幕前**张开双臂**（呈“大”字形或 T 字姿态）时。
-  - 系统会自动触发“随机抽选”机制。
-  - 被选中的照片会从墙中飞出，放大并悬浮在屏幕中心，并伴有青色脉冲发光效果。
-- **科幻风格 UI**：
-  - 实时 HUD 仪表盘展示人体骨骼追踪状态。
-  - 动态背景粒子与星空效果。
-  - 适配大屏幕的超高清视觉设计。
+## ✨ 功能
+
+- **3D 球面照片墙**：斐波那契球面均匀分布，平滑旋转；支持球面/螺旋/平面三种布局
+- **人体追踪**：MediaPipe **tasks-vision**（新版 API）PoseLandmarker，照片墙跟随身体重心偏转
+- **手势交互**（防误触 + 冷却 + 需保持触发）：
+  | 手势 | 动作 | 效果 |
+  |---|---|---|
+  | 🕐 张开双臂（T 字）| 保持 0.4s | 随机照片飞向屏幕中心特写，5s 后飞回 |
+  | 👋 挥手 | 单侧手举起横向摆动 | 切换布局：球面 ↔ 螺旋 ↔ 平面 |
+  | 🙌 双手上举 | 保持 0.35s | 全场照片脉冲彩蛋 |
+- **后台换照片**：`#/admin` 管理页上传/删除，原图自动压缩 + 生成 320px 缩略图（3D 墙专用省显存），展示端热更新
+- **科幻 HUD**：骨骼点叠加、目标锁定、遥测面板、引导页
 
 ## 🛠️ 技术栈
 
-- **前端框架**：React 19
-- **3D 渲染**：Three.js + @react-three/fiber + @react-three/drei
-- **AI 视觉**：MediaPipe Pose (人体姿态估计)
-- **样式处理**：Tailwind CSS
-- **交互逻辑**：自定义姿态判定算法 (utils/poseUtils.ts)
+React 19 · Three.js + @react-three/fiber + drei · **@mediapipe/tasks-vision 1.0.1**（替代已冻结的 legacy `@mediapipe/pose`）· Vite 6 · Express（后端）· sharp（图片处理）· Tailwind（本地化）
 
-## 🎮 互动指南
+## 🚀 快速开始（开发）
 
-1. **进入感应区**：走到摄像头能够拍摄到的位置，系统会自动锁定目标（底部的 "TARGET LOCK" 会亮起）。
-2. **操控方向**：你左右或上下移动，照片墙会随你的身体重心实时旋转。
-3. **查看特写**：张开你的双臂，保持一秒钟。系统会捕捉到这个动作，并为你随机放大一张精彩的照片。
-4. **自动回归**：特写照片会在 5 秒后自动飞回原位，照片墙恢复自由旋转。
+```bash
+npm install
+npm run samples        # 生成 24 张内置示例照片（需 python3-PIL）
+npm run server         # 启动后端 :8787（照片 API + 静态托管）
+npm run dev            # Vite 开发服务器 :3000（/api 代理到 8787）
+```
 
-## 🚀 部署与优化
+访问 `http://<IP>:3000`。管理后台 `http://<IP>:3000/#/admin`（Token 见 `data/.admin_token`）。
 
-- **分辨率适配**：应用采用响应式 3D 渲染，可自动适配学校 4K 或超宽 LED 屏幕。
-- **性能优化**：
-  - 使用了 MediaPipe 的 `modelComplexity: 1` 兼顾精度与帧率。
-  - 开启了 `dpr={[1, 2]}` 确保在高分屏下的渲染清晰度。
-- **离线支持**：通过 CDN 引入依赖，但在部署环境建议缓存 MediaPipe 模型文件。
+## 📦 部署（OrangePi + LED 屏）
 
-## 📂 目录结构
+```bash
+npm run build                        # 产物 dist/（含 wasm/模型/照片，全本地离线）
+sudo bash deploy/install.sh backend  # 后端注册 systemd 开机自启
+# 交互测试通过后：
+bash deploy/install.sh kiosk         # 登录后自动全屏 kiosk（chromium）
+```
 
-- `App.tsx`: 主程序逻辑，包含摄像头初始化与状态管理。
-- `components/PhotoWall.tsx`: 处理照片在 3D 空间中的球体布局与跟随逻辑。
-- `components/PhotoCard.tsx`: 单张照片的渲染组件，负责放大动画与发光特效。
-- `utils/poseUtils.ts`: 包含姿态计算逻辑，如重心偏移计算与“张开双臂”动作判定。
+- 展示端：`http://<IP>:8787/`；后台：`http://<IP>:8787/#/admin`
+- kiosk 手动启动：`DISPLAY=:0 deploy/start-kiosk.sh`（崩溃自动重启）
+- 管理 Token：首次运行自动生成于 `data/.admin_token`，或用环境变量 `ADMIN_TOKEN` 固定
+
+## ⚙️ 弱机性能优化（要点）
+
+| 优化 | 说明 |
+|---|---|
+| 推理降采样 | 摄像头 640×480 → 推理输入 320×240（`inputScale: 0.5`） |
+| 推理节流 | 默认 ~15fps（`inferenceIntervalMs: 66`），3D 渲染仍 60fps，姿态由 lerp 平滑 |
+| HUD 状态节流 | React setState 5Hz，姿态本体走 ref，3D 层**零重渲染** |
+| wasm 多线程 | 后端响应 COOP/COEP 头 → SharedArrayBuffer 生效（实测已启用） |
+| delegate | 默认 CPU（XNNPACK，实测 65ms/帧）；GPU delegate 实测 62ms 无优势，可 `?delegate=gpu` 切换 |
+| 3D 减负 | dpr=1（1080p）、Stars 6000→1200、粒子数组 useMemo 固定缓冲、去掉运行时 HDR Environment、特写卡片外零每帧分配 |
+| 纹理内存 | 3D 墙使用 320px 缩略图；80 张 ≈ 30MB 显存预算内 |
+
+## 🧪 测试与调试
+
+```bash
+npm run typecheck          # TS 检查
+npm run test:gestures      # 手势引擎单元测试（10 项：触发/冷却/防误触/破势）
+```
+
+- `?debug=pose`：用静态人物图模拟摄像头，无人在场也能验证整条链路（右上角显示推理耗时）
+- `?debug=pose&poseImg=/debug/xxx.jpg`：指定测试图
+- `?debug`：性能浮层（3D FPS + 推理 ms + 姿态状态）
+- `scripts/cdp_probe.mjs`：连 Chromium 远程调试端口读取状态/截图（验收工具）
+
+## 📁 目录结构
+
+```
+App.tsx               主程序（摄像头/姿态/手势/状态管理）
+components/           3D 场景 + 管理后台 + 调试 HUD
+utils/config.ts       全部调优参数集中配置
+utils/posePipeline.ts MediaPipe tasks-vision 封装（降采样/节流/回退）
+utils/poseUtils.ts    手势状态机（T字/挥手/上举 + 重心计算）
+server.mjs            后端（照片 API + 静态托管 + COOP/COEP）
+public/               wasm / 模型 / 示例照片 / Tailwind（全本地）
+deploy/               systemd 单元 + kiosk 脚本 + 安装脚本
+scripts/              示例图生成 / 单元测试 / CDP 探针
+```
+
+## ⚠️ 已知说明
+
+- 原项目依赖 esm.sh CDN importmap 运行时加载（弱机首屏慢、离线不可用），已改为 Vite 全量本地打包
+- 原项目每次特写触发都会销毁重建整条姿态管线（黑屏数秒），已修复（回调 ref 稳定化）
+- 无摄像头时优雅降级：显示 Camera Error 面板，照片墙继续自转
+- GPU delegate 在 Chromium 110 + libmali blob 下可用但无性能优势；如升级新版 Chromium 可复测

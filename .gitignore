@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# 运行数据（上传照片、索引、管理 Token）
+data
+.tmp
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
