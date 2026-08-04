@@ -1,0 +1,17 @@
+[Unit]
+Description=Photos Wall 3D backend (照片墙后端服务)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/orangepi/.openclaw/workspace/Photos-Wall-3D
+ExecStart=/usr/bin/node server.mjs
+Restart=always
+RestartSec=3
+User=orangepi
+Environment=NODE_ENV=production
+# 可选：固定管理 Token（默认自动生成于 data/.admin_token）
+# Environment=ADMIN_TOKEN=your-token
+
+[Install]
+WantedBy=multi-user.target

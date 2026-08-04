@@ -1,174 +1,219 @@
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Stars, Text, Environment } from '@react-three/drei';
-import * as mpPose from '@mediapipe/pose';
-import * as cam from '@mediapipe/camera_utils';
+import { OrbitControls, PerspectiveCamera, Stars } from '@react-three/drei';
 import PhotoWall from './components/PhotoWall';
-import { PhotoItem, PoseData } from './types';
-import { detectArmsSpread, getCenterOffset } from './utils/poseUtils';
+import AdminPanel from './components/AdminPanel';
+import DebugHud from './components/DebugHud';
+import { PosePipeline } from './utils/posePipeline';
+import { GestureEngine, getCenterOffset } from './utils/poseUtils';
+import { PhotoItem, PoseData, PoseResult, LayoutMode } from './types';
+import { APP_CONFIG } from './utils/config';
 
-// Seeded photos for consistent "school gallery" look
-const SAMPLE_PHOTOS: PhotoItem[] = Array.from({ length: 80 }, (_, i) => ({
-  id: `photo-${i}`,
-  url: `https://picsum.photos/seed/school-${i}/600/800`,
+// 内置示例照片（后端无照片时兜底；全部本地资源，离线可用）
+const SAMPLE_PHOTOS: PhotoItem[] = Array.from({ length: APP_CONFIG.samplePhotoCount }, (_, i) => ({
+  id: `sample-${i}`,
+  url: `/samples/sample-${i}.jpg`,
 }));
+
+const DEBUG_POSE = new URLSearchParams(window.location.search).get('debug') === 'pose';
+const DEBUG_POSE_IMG = new URLSearchParams(window.location.search).get('poseImg') || '/debug/person.jpg';
+const DEBUG_HUD = new URLSearchParams(window.location.search).has('debug');
+const IS_ADMIN = window.location.hash.startsWith('#/admin');
 
 const App: React.FC = () => {
   const [photos, setPhotos] = useState<PhotoItem[]>(SAMPLE_PHOTOS);
-  const [pose, setPose] = useState<PoseData | null>(null);
+  const [hudPose, setHudPose] = useState<PoseData | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
-  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [layout, setLayout] = useState<LayoutMode>('sphere');
+  const [burstUntil, setBurstUntil] = useState(0);
+  const [cameraState, setCameraState] = useState<'init' | 'ready' | 'error'>('init');
+  const [cameraError, setCameraError] = useState('');
   const [showInstructions, setShowInstructions] = useState(true);
+  const [lastGesture, setLastGesture] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const poseRef = useRef<any>(null);
-  const lastFocusTime = useRef<number>(0);
 
-  // Trigger focus on a random image
+  // 姿态走 ref：每帧更新不触发 React 重渲染（3D 层零开销跟随）
+  const poseRef = useRef<PoseData | null>(null);
+  const inferenceMsRef = useRef(0);
+
+  // 稳定引用：回调不因 state 变化而重建，杜绝"管线被反复重建"问题
+  const photosRef = useRef(photos);
+  photosRef.current = photos;
+  const focusedIdRef = useRef(focusedId);
+  focusedIdRef.current = focusedId;
+  const lastHudUpdateRef = useRef(0);
+  const focusLockUntilRef = useRef(0);
+
   const triggerRandomFocus = useCallback(() => {
     const now = Date.now();
-    // Throttle to prevent multiple rapid triggers during one pose
-    if (focusedId || (now - lastFocusTime.current < 5000)) return;
-
-    lastFocusTime.current = now;
-    const randomIndex = Math.floor(Math.random() * photos.length);
-    const selected = photos[randomIndex];
+    if (focusedIdRef.current || now < focusLockUntilRef.current) return;
+    const list = photosRef.current;
+    if (list.length === 0) return;
+    focusLockUntilRef.current = now + APP_CONFIG.gestureCooldownMs;
+    const selected = list[Math.floor(Math.random() * list.length)];
     setFocusedId(selected.id);
+    setLastGesture('T-POSE → FOCUS');
+    window.setTimeout(() => setFocusedId(null), APP_CONFIG.focusDurationMs);
+  }, []);
 
-    // Auto-dismiss focused photo after 5 seconds
-    setTimeout(() => {
-      setFocusedId(null);
-    }, 5000);
-  }, [photos, focusedId]);
+  // 手势动作映射（经 ref 分发，闭包始终最新）
+  const handleGestureRef = useRef<(g: 'arms_spread' | 'wave' | 'hands_up') => void>(() => {});
+  handleGestureRef.current = (g) => {
+    if (g === 'arms_spread') {
+      triggerRandomFocus();
+    } else if (g === 'wave') {
+      setLayout((prev) => (prev === 'sphere' ? 'helix' : prev === 'helix' ? 'plane' : 'sphere'));
+      setLastGesture('WAVE → LAYOUT');
+    } else if (g === 'hands_up') {
+      setBurstUntil(Date.now() + APP_CONFIG.burstDurationMs);
+      setLastGesture('HANDS UP → BURST');
+    }
+  };
 
-  // Handle MediaPipe results
-  const onResults = useCallback((results: any) => {
-    if (!results.poseLandmarks || results.poseLandmarks.length === 0) {
-      setPose(null);
+  // 骨架 HUD 绘制（画在 640x480 canvas 上，坐标与视频帧同向）
+  const drawSkeleton = useCallback((landmarks: any[], spread: boolean) => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    const { width, height } = c;
+    ctx.clearRect(0, 0, width, height);
+    for (const lm of landmarks) {
+      ctx.beginPath();
+      ctx.arc(lm.x * width, lm.y * height, 2.5, 0, 2 * Math.PI);
+      ctx.fillStyle = spread ? '#00f2ff' : '#ffffff88';
+      ctx.fill();
+    }
+  }, []);
+
+  const gestureEngineRef = useRef(new GestureEngine({
+    cooldownMs: APP_CONFIG.gestureCooldownMs,
+    focusHoldMs: APP_CONFIG.focusHoldMs,
+    handsUpHoldMs: APP_CONFIG.handsUpHoldMs,
+    waveWindowMs: APP_CONFIG.waveWindowMs,
+    waveMinReversals: APP_CONFIG.waveMinReversals,
+  }));
+
+  // 推理结果回调（稳定 ref，管线只初始化一次）
+  const onResultRef = useRef<(r: PoseResult) => void>(() => {});
+  onResultRef.current = (r) => {
+    inferenceMsRef.current = r.inferenceMs;
+
+    if (!r.landmarks || r.landmarks.length === 0) {
+      poseRef.current = null;
       return;
     }
+    const now = performance.now();
+    const engine = gestureEngineRef.current;
+    const gesture = engine.update(r.landmarks, now);
+    const offset = getCenterOffset(r.landmarks);
+    const score = r.landmarks[0]?.visibility ?? 0.5;
 
-    const offset = getCenterOffset(results.poseLandmarks);
-    const isArmsSpread = detectArmsSpread(results.poseLandmarks);
-
-    setPose({
+    poseRef.current = {
       x: offset.x,
       y: offset.y,
-      isArmsSpread,
-      score: results.poseLandmarks[0]?.visibility ?? 0.5,
-    });
-
-    if (isArmsSpread) {
-      triggerRandomFocus();
-    }
-    
-    // Minimal feedback drawing
-    if (canvasRef.current && videoRef.current) {
-      const ctx = canvasRef.current.getContext('2d');
-      if (ctx) {
-        const { width, height } = canvasRef.current;
-        ctx.clearRect(0, 0, width, height);
-        
-        // Draw pose skeleton for user feedback
-        results.poseLandmarks.forEach((lm: any) => {
-          ctx.beginPath();
-          ctx.arc(lm.x * width, lm.y * height, 2.5, 0, 2 * Math.PI);
-          ctx.fillStyle = isArmsSpread ? '#00f2ff' : '#ffffff88';
-          ctx.fill();
-        });
-      }
-    }
-  }, [triggerRandomFocus]);
-
-  // Initialize MediaPipe
-  useEffect(() => {
-    const PoseClass = (mpPose as any).Pose || (mpPose as any).default?.Pose || (mpPose as any).default;
-    const CameraClass = (cam as any).Camera || (cam as any).default?.Camera || (cam as any).default;
-    
-    if (!PoseClass || !CameraClass) {
-      console.error("MediaPipe modules failed to load correctly.");
-      return;
-    }
-
-    const poseInstance = new PoseClass({
-      locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-    });
-
-    poseInstance.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      minDetectionConfidence: 0.6, // Increased for more reliable detection
-      minTrackingConfidence: 0.6,   // Increased for more stable tracking
-    });
-
-    poseInstance.onResults(onResults);
-    poseRef.current = poseInstance;
-
-    let cameraInstance: any = null;
-
-    if (videoRef.current) {
-      cameraInstance = new CameraClass(videoRef.current, {
-        onFrame: async () => {
-          if (videoRef.current && poseRef.current) {
-            await poseRef.current.send({ image: videoRef.current! });
-          }
-        },
-        width: 640,
-        height: 480,
-      });
-      cameraInstance.start().then(() => setIsCameraReady(true));
-    }
-
-    return () => {
-      if (poseRef.current) poseRef.current.close();
-      if (cameraInstance) cameraInstance.stop?.();
+      score,
+      isArmsSpread: engine.isSpreadNow(),
     };
-  }, [onResults]);
 
-  // Instructions auto-dismiss
+    if (gesture) handleGestureRef.current(gesture);
+
+    // HUD setState 节流（5Hz），骨架绘制每次推理都画（~15fps）
+    drawSkeleton(r.landmarks, engine.isSpreadNow());
+    if (now - lastHudUpdateRef.current >= APP_CONFIG.hudUpdateIntervalMs) {
+      lastHudUpdateRef.current = now;
+      setHudPose(poseRef.current);
+    }
+  };
+
+  // 初始化姿态管线（仅一次；StrictMode 已移除避免 dev 双摄像头）
   useEffect(() => {
-    const timer = setTimeout(() => setShowInstructions(false), 8000);
-    return () => clearTimeout(timer);
+    if (IS_ADMIN || !videoRef.current) return;
+    // 调试钩子：CDP/控制台可读取实时状态（kiosk 运维用）
+    if (DEBUG_HUD) {
+      (window as any).__PW3D__ = {
+        getPose: () => poseRef.current,
+        getInferenceMs: () => inferenceMsRef.current,
+      };
+    }
+    const pipeline = new PosePipeline(videoRef.current, {
+      onReady: () => setCameraState('ready'),
+      onError: (e) => {
+        setCameraState('error');
+        setCameraError(String(e?.message || e || '摄像头不可用'));
+      },
+      onResult: (r) => onResultRef.current(r),
+    });
+    pipeline.start(DEBUG_POSE ? DEBUG_POSE_IMG : undefined);
+    return () => pipeline.stop();
   }, []);
+
+  // 从后端加载照片（管理员上传的）
+  useEffect(() => {
+    if (IS_ADMIN) return;
+    fetch('/api/photos')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: any[]) => {
+        if (Array.isArray(list) && list.length > 0) {
+          setPhotos(list.map((p) => ({ id: p.id, url: p.url, thumb: p.thumb, name: p.name })));
+        }
+      })
+      .catch(() => { /* 后端未启动时静默使用示例照片 */ });
+  }, []);
+
+  // 引导页自动消失
+  useEffect(() => {
+    const t = window.setTimeout(() => setShowInstructions(false), 8000);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  // ---------- 管理后台 ----------
+  if (IS_ADMIN) {
+    return <AdminPanel />;
+  }
 
   return (
     <div className="relative w-full h-full bg-[#00050a] overflow-hidden select-none">
-      {/* 3D Scene */}
-      <Canvas dpr={[1, 2]}>
+      {/* 3D 场景 */}
+      <Canvas dpr={APP_CONFIG.dpr}>
         <PerspectiveCamera makeDefault position={[0, 0, 16]} fov={55} />
         <color attach="background" args={['#000810']} />
-        
-        <Stars radius={100} depth={50} count={6000} factor={4} saturation={0.5} fade speed={1.5} />
-        <Environment preset="night" />
+
+        <Stars radius={100} depth={50} count={APP_CONFIG.starCount} factor={4} saturation={0.5} fade speed={1.5} />
         <ambientLight intensity={0.2} />
         <pointLight position={[10, 10, 10]} intensity={2} color="#00f2ff" />
         <pointLight position={[-10, -10, 20]} intensity={1} color="#ff0055" />
-        
-        <PhotoWall photos={photos} pose={pose} focusedId={focusedId} />
-        
-        <OrbitControls 
-          enablePan={false} 
-          enableZoom={true} 
-          minDistance={8} 
+
+        <PhotoWall
+          photos={photos}
+          poseRef={poseRef}
+          focusedId={focusedId}
+          layout={layout}
+          burstUntil={burstUntil}
+        />
+
+        <OrbitControls
+          enablePan={false}
+          enableZoom={true}
+          minDistance={8}
           maxDistance={30}
-          autoRotate={!pose || pose.score < 0.3}
-          autoRotateSpeed={0.4}
+          // autoRotate 已移除：无人时由 PhotoWall 自身旋转，避免双重旋转
         />
       </Canvas>
 
-      {/* Sensor HUD (Bottom Right) */}
+      {/* 传感器 HUD（右下） */}
       <div className="absolute bottom-6 right-6 flex flex-col items-end gap-3 z-20">
-        {pose?.isArmsSpread && (
+        {hudPose?.isArmsSpread && (
           <div className="bg-cyan-500 text-black px-4 py-2 font-black text-sm rounded shadow-lg animate-bounce uppercase tracking-widest">
             Capture Triggered!
           </div>
         )}
-        <div className="w-56 h-42 bg-black/40 backdrop-blur-md border border-cyan-500/30 rounded-xl overflow-hidden shadow-2xl">
-          <video ref={videoRef} className="hidden" style={{ transform: 'scaleX(-1)' }} />
+        <div className="w-56 h-44 bg-black/40 backdrop-blur-md border border-cyan-500/30 rounded-xl overflow-hidden shadow-2xl">
+          <video ref={videoRef} className="hidden" style={{ transform: 'scaleX(-1)' }} playsInline muted />
           <canvas ref={canvasRef} className="w-full h-full transform scale-x-[-1] opacity-80" width={640} height={480} />
-          {!isCameraReady && (
+          {cameraState === 'init' && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/90">
               <div className="flex flex-col items-center gap-2">
                 <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
@@ -176,14 +221,28 @@ const App: React.FC = () => {
               </div>
             </div>
           )}
+          {cameraState === 'error' && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/90">
+              <div className="flex flex-col items-center gap-2 px-3 text-center">
+                <span className="text-[10px] text-red-400 font-bold uppercase tracking-widest">Camera Error</span>
+                <span className="text-[9px] text-white/60 break-all">{cameraError}</span>
+                <button
+                  className="text-[10px] text-cyan-400 border border-cyan-500/40 rounded px-2 py-0.5 hover:bg-cyan-500/10"
+                  onClick={() => window.location.reload()}
+                >
+                  RETRY
+                </button>
+              </div>
+            </div>
+          )}
           <div className="absolute top-3 left-3 flex items-center gap-2">
-            <div className={`w-2.5 h-2.5 rounded-full ${pose && pose.score > 0.3 ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`} />
+            <div className={`w-2.5 h-2.5 rounded-full ${hudPose && hudPose.score > 0.3 ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`} />
             <span className="text-[9px] font-black text-white/70 tracking-widest uppercase">Motion Matrix</span>
           </div>
         </div>
       </div>
 
-      {/* Main UI Header */}
+      {/* 主标题（左上） */}
       <div className="absolute top-10 left-10 z-10 pointer-events-none">
         <h1 className="text-5xl font-black text-white tracking-tighter flex items-center gap-4">
           PHOTOS WALL <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600">3D</span>
@@ -192,12 +251,12 @@ const App: React.FC = () => {
         <p className="text-cyan-400/60 mt-4 uppercase tracking-[0.3em] text-[10px] font-bold">Interactive Digital Landmark • Campus Hub</p>
       </div>
 
-      {/* Telemetry Stats (Bottom Left) */}
+      {/* 遥测（左下） */}
       <div className="absolute bottom-10 left-10 flex items-center gap-10 z-10">
         <div className="flex flex-col gap-1">
           <span className="text-[9px] text-gray-500 font-black uppercase tracking-[0.2em]">Target Lock</span>
-          <span className={`text-lg font-mono tracking-tighter ${pose && pose.score > 0.3 ? 'text-white' : 'text-white/20'}`}>
-            {pose && pose.score > 0.3 ? 'IDENTIFIED_USER' : 'SCANNING_EMPTY'}
+          <span className={`text-lg font-mono tracking-tighter ${hudPose && hudPose.score > 0.3 ? 'text-white' : 'text-white/20'}`}>
+            {hudPose && hudPose.score > 0.3 ? 'IDENTIFIED_USER' : 'SCANNING_EMPTY'}
           </span>
         </div>
         <div className="w-[1px] h-10 bg-white/10" />
@@ -205,50 +264,69 @@ const App: React.FC = () => {
           <span className="text-[9px] text-gray-500 font-black uppercase tracking-[0.2em]">Data Nodes</span>
           <span className="text-lg font-mono text-cyan-500">{photos.length} ARCHIVES</span>
         </div>
+        <div className="w-[1px] h-10 bg-white/10" />
+        <div className="flex flex-col gap-1">
+          <span className="text-[9px] text-gray-500 font-black uppercase tracking-[0.2em]">Layout / Gesture</span>
+          <span className="text-lg font-mono text-cyan-500 uppercase tracking-wider">
+            {layout} {lastGesture && <span className="text-cyan-300 text-sm ml-2">{lastGesture}</span>}
+          </span>
+        </div>
       </div>
 
-      {/* Interaction Guide */}
+      {/* 引导页 */}
       {showInstructions && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#00050a]/80 backdrop-blur-xl pointer-events-none transition-all duration-1000">
-           <div className="max-w-xl text-center px-12 py-16 rounded-3xl border border-white/5 bg-gradient-to-b from-white/5 to-transparent shadow-2xl">
-              <div className="mb-8 inline-block px-4 py-1 rounded-full border border-cyan-500/30 text-cyan-400 text-[10px] font-black uppercase tracking-widest">
-                System Interface Active
-              </div>
-              <h2 className="text-4xl font-black text-white mb-6 tracking-tight">INTERACTIVE MODE</h2>
-              
-              <div className="grid grid-cols-2 gap-12 mb-12">
-                <div className="space-y-4">
-                  <div className="w-20 h-20 mx-auto rounded-2xl bg-white/5 flex items-center justify-center border border-white/10">
-                    <svg className="w-10 h-10 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-xs font-black text-cyan-500 uppercase tracking-widest">Step Forward</h3>
-                </div>
-                <div className="space-y-4">
-                  <div className="w-20 h-20 mx-auto rounded-2xl bg-cyan-500/10 flex items-center justify-center border border-cyan-500/20 animate-pulse">
-                    <svg className="w-10 h-10 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-xs font-black text-cyan-500 uppercase tracking-widest">Spread Arms</h3>
-                </div>
-              </div>
+          <div className="max-w-xl text-center px-12 py-16 rounded-3xl border border-white/5 bg-gradient-to-b from-white/5 to-transparent shadow-2xl">
+            <div className="mb-8 inline-block px-4 py-1 rounded-full border border-cyan-500/30 text-cyan-400 text-[10px] font-black uppercase tracking-widest">
+              System Interface Active
+            </div>
+            <h2 className="text-4xl font-black text-white mb-6 tracking-tight">INTERACTIVE MODE</h2>
 
-              <p className="text-gray-400 text-sm leading-relaxed font-light max-w-sm mx-auto italic">
-                The gallery orbits around you. 
-                <br />
-                <strong className="text-white not-italic">Spread your arms wide</strong> to bring a memory into the light.
-              </p>
-           </div>
+            <div className="grid grid-cols-3 gap-8 mb-10">
+              <div className="space-y-3">
+                <div className="w-16 h-16 mx-auto rounded-2xl bg-white/5 flex items-center justify-center border border-white/10">
+                  <svg className="w-8 h-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <h3 className="text-xs font-black text-cyan-500 uppercase tracking-widest">走近</h3>
+              </div>
+              <div className="space-y-3">
+                <div className="w-16 h-16 mx-auto rounded-2xl bg-cyan-500/10 flex items-center justify-center border border-cyan-500/20 animate-pulse">
+                  <svg className="w-8 h-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <h3 className="text-xs font-black text-cyan-500 uppercase tracking-widest">张开双臂</h3>
+              </div>
+              <div className="space-y-3">
+                <div className="w-16 h-16 mx-auto rounded-2xl bg-white/5 flex items-center justify-center border border-white/10">
+                  <svg className="w-8 h-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <h3 className="text-xs font-black text-cyan-500 uppercase tracking-widest">挥手换布局</h3>
+              </div>
+            </div>
+
+            <p className="text-gray-400 text-sm leading-relaxed font-light max-w-sm mx-auto italic">
+              照片墙会围绕你转动。<br />
+              <strong className="text-white not-italic">张开双臂</strong> 召唤一张照片特写，
+              <strong className="text-white not-italic">挥手</strong> 切换布局，
+              <strong className="text-white not-italic">双手上举</strong> 触发脉冲彩蛋。
+            </p>
+          </div>
         </div>
       )}
 
-      {/* Screen Effects */}
-      {pose?.isArmsSpread && (
+      {/* 屏幕特效 */}
+      {hudPose?.isArmsSpread && (
         <div className="absolute inset-0 pointer-events-none bg-cyan-500/5 z-0 animate-pulse border-[20px] border-cyan-500/10" />
       )}
       <div className="absolute inset-0 pointer-events-none shadow-[inset_0_0_150px_rgba(0,0,0,0.8)]" />
+
+      {/* 调试 HUD（?debug 开启） */}
+      {DEBUG_HUD && <DebugHud poseRef={poseRef} inferenceMsRef={inferenceMsRef} />}
     </div>
   );
 };
