@@ -14,7 +14,7 @@ export interface PhotoItem {
   name?: string;
 }
 
-export type LayoutMode = 'sphere' | 'helix' | 'plane';
+export type LayoutMode = 'sphere' | 'cube' | 'waterfall';
 
 export interface WallConfig {
   layout: LayoutMode;
