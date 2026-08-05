@@ -20,6 +20,15 @@ const DEBUG_POSE_IMG = new URLSearchParams(window.location.search).get('poseImg'
 const DEBUG_HUD = new URLSearchParams(window.location.search).has('debug');
 const IS_ADMIN = window.location.hash.startsWith('#/admin');
 
+// MediaPipe Pose 标准骨架连线（33 点拓扑）
+const POSE_CONNECTIONS: Array<[number, number]> = [
+  [0, 1], [1, 2], [2, 3], [3, 7], [0, 4], [4, 5], [5, 6], [6, 8],
+  [9, 10], [11, 12], [11, 13], [13, 15], [15, 17], [15, 19], [15, 21], [17, 19],
+  [12, 14], [14, 16], [16, 18], [16, 20], [16, 22], [18, 20],
+  [11, 23], [12, 24], [23, 24], [23, 25], [24, 26], [25, 27], [26, 28],
+  [27, 29], [28, 30], [29, 31], [30, 32], [27, 31], [28, 32],
+];
+
 const App: React.FC = () => {
   const [photos, setPhotos] = useState<PhotoItem[]>(SAMPLE_PHOTOS);
   const [hudPose, setHudPose] = useState<PoseData | null>(null);
@@ -72,18 +81,38 @@ const App: React.FC = () => {
     }
   };
 
-  // 骨架 HUD 绘制（画在 640x480 canvas 上，坐标与视频帧同向）
+  // 骨架 HUD 绘制：摄像头实时画面打底 + 33 点全身骨架（实时监控窗）
   const drawSkeleton = useCallback((landmarks: any[], spread: boolean) => {
     const c = canvasRef.current;
+    const v = videoRef.current;
     if (!c) return;
     const ctx = c.getContext('2d');
     if (!ctx) return;
     const { width, height } = c;
-    ctx.clearRect(0, 0, width, height);
+    // 1. 摄像头实时画面（镜像由 CSS transform 处理）
+    if (v && v.readyState >= 2 && v.videoWidth > 0) {
+      ctx.drawImage(v, 0, 0, width, height);
+    } else {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, width, height);
+    }
+    // 2. 骨架连线 + 关节点
+    if (!landmarks || landmarks.length === 0) return;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = spread ? '#00f2ff' : 'rgba(255,255,255,0.8)';
+    ctx.beginPath();
+    for (const [a, b] of POSE_CONNECTIONS) {
+      const pa = landmarks[a];
+      const pb = landmarks[b];
+      if (!pa || !pb) continue;
+      ctx.moveTo(pa.x * width, pa.y * height);
+      ctx.lineTo(pb.x * width, pb.y * height);
+    }
+    ctx.stroke();
+    ctx.fillStyle = spread ? '#00f2ff' : 'rgba(255,255,255,0.6)';
     for (const lm of landmarks) {
       ctx.beginPath();
-      ctx.arc(lm.x * width, lm.y * height, 2.5, 0, 2 * Math.PI);
-      ctx.fillStyle = spread ? '#00f2ff' : '#ffffff88';
+      ctx.arc(lm.x * width, lm.y * height, 2, 0, 2 * Math.PI);
       ctx.fill();
     }
   }, []);
@@ -103,6 +132,8 @@ const App: React.FC = () => {
 
     if (!r.landmarks || r.landmarks.length === 0) {
       poseRef.current = null;
+      // 无人：保留实时画面，清掉骨架
+      drawSkeleton([], false);
       return;
     }
     const now = performance.now();
@@ -214,7 +245,7 @@ const App: React.FC = () => {
             Capture Triggered!
           </div>
         )}
-        <div className="w-56 h-44 bg-black/40 backdrop-blur-md border border-cyan-500/30 rounded-xl overflow-hidden shadow-2xl">
+        <div className="w-72 h-56 bg-black/40 backdrop-blur-md border border-cyan-500/30 rounded-xl overflow-hidden shadow-2xl">
           <video ref={videoRef} className="hidden" style={{ transform: 'scaleX(-1)' }} playsInline muted />
           <canvas ref={canvasRef} className="w-full h-full transform scale-x-[-1] opacity-80" width={640} height={480} />
           {cameraState === 'init' && (
@@ -242,6 +273,9 @@ const App: React.FC = () => {
           <div className="absolute top-3 left-3 flex items-center gap-2">
             <div className={`w-2.5 h-2.5 rounded-full ${hudPose && hudPose.score > 0.3 ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`} />
             <span className="text-[9px] font-black text-white/70 tracking-widest uppercase">Motion Matrix</span>
+          </div>
+          <div className="absolute bottom-1.5 right-2.5 text-[9px] font-mono text-cyan-400/80 tracking-wider">
+            {hudPose ? `${(hudPose.score * 100).toFixed(0)}%` : '--'} · {inferenceMsRef.current}ms
           </div>
         </div>
       </div>
