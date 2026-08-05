@@ -106,8 +106,8 @@ export class GestureEngine {
 
     // ---------- 挥手（单侧手举起并横向摆动） ----------
     // 挥手的"姿态前提"：一侧手腕抬起，另一侧自然下垂，两臂未张开
-    const leftWave = lw.y < ls.y + 0.1 && rw.y > rs.y + 0.1 && !spread && !handsUp && vis(lw);
-    const rightWave = rw.y < rs.y + 0.1 && lw.y > ls.y + 0.1 && !spread && !handsUp && vis(rw);
+    const leftWave = lw.y < ls.y + 0.25 && rw.y > rs.y - 0.05 && !spread && !handsUp && vis(lw);
+    const rightWave = rw.y < rs.y + 0.25 && lw.y > ls.y - 0.05 && !spread && !handsUp && vis(rw);
     const waveWrist = leftWave ? lw : rightWave ? rw : null;
     const waveX = waveWrist ? waveWrist.x : 0;
 
@@ -156,7 +156,7 @@ export class GestureEngine {
         let dir = 0;
         for (let i = 1; i < pts.length; i++) {
           const dx = pts[i].x - pts[i - 1].x;
-          if (Math.abs(dx) < 0.02) continue; // 过滤抖动
+          if (Math.abs(dx) < 0.015) continue; // 过滤抖动（0.02→0.015：小幅挥手也能识别）
           const d = dx > 0 ? 1 : -1;
           if (dir !== 0 && d !== dir) reversals++;
           dir = d;
@@ -168,7 +168,9 @@ export class GestureEngine {
         }
       }
     } else {
-      this.wavePoints.length = 0;
+      // 前提暂不满足：不清空轨迹，仅裁剪保留最近 300ms（防一两帧抖动/掉帧打断计数）
+      const keep = now - 300;
+      while (this.wavePoints.length && this.wavePoints[0].t < keep) this.wavePoints.shift();
       this.waveReversals = 0;
       if (this.waveBrokenSince === 0) this.waveBrokenSince = now;
     }
