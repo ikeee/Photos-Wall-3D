@@ -27,11 +27,11 @@ export const APP_CONFIG = {
   wallRadius: 10,
 
   // ---------- 手势 ----------
-  gestureCooldownMs: 4000, // 任意手势触发后的全局冷却
+  gestureCooldownMs: 2000, // 任意手势触发后的全局冷却（4000→2000：连续切换响应更快）
   focusHoldMs: 400, // T 字张臂需保持 ~400ms 才触发（防误触）
   handsUpHoldMs: 350, // 双手上举保持时间
   waveWindowMs: 1200, // 挥手判定滑动窗口
-  waveMinReversals: 3, // 窗口内方向反转次数阈值
+  waveMinReversals: 2, // 窗口内方向反转次数阈值（3→2：一趟来回即触发）
   focusDurationMs: 5000, // 特写持续时长
   burstDurationMs: 2600, // 双手上举彩蛋持续时长
 

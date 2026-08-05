@@ -25,7 +25,7 @@ const NEUTRAL = {
 const T_POSE = { ...NEUTRAL, 15: [0.2, 0.42, 1], 16: [0.8, 0.42, 1] };
 const HANDS_UP = { ...NEUTRAL, 15: [0.45, 0.3, 1], 16: [0.55, 0.3, 1] };
 
-const OPTS = { cooldownMs: 4000, focusHoldMs: 400, handsUpHoldMs: 350, waveWindowMs: 1200, waveMinReversals: 3 };
+const OPTS = { cooldownMs: 2000, focusHoldMs: 400, handsUpHoldMs: 350, waveWindowMs: 1200, waveMinReversals: 2 };
 
 function makeEngine() { return new GestureEngine(OPTS); }
 function frames(seq) { return seq.map(([pts, t]) => ({ pts, t })); }
@@ -71,7 +71,7 @@ console.log('== 挥手 ==');
     seq.push([{ ...NEUTRAL, 15: [0.4, 0.65, 1], 16: [xs[i], 0.4, 1] }, 1000 + i * 100]);
   }
   for (const f of frames(seq)) { const g = eng.update(mk(f.pts), f.t); if (g) fired.push([g, f.t]); }
-  assert('摆动3次反转触发 wave', fired.length === 1 && fired[0][0] === 'wave', JSON.stringify(fired));
+  assert('摆动反转触发 wave', fired.length === 1 && fired[0][0] === 'wave', JSON.stringify(fired));
 }
 
 console.log('== 挥手防误触：举起但不动 ==');
@@ -82,6 +82,34 @@ console.log('== 挥手防误触：举起但不动 ==');
   for (let t = 500; t <= 3000; t += 100) seq.push([{ ...NEUTRAL, 15: [0.4, 0.65, 1], 16: [0.6, 0.4, 1] }, t]);
   for (const f of frames(seq)) { const g = eng.update(mk(f.pts), f.t); if (g) fired.push([g, f.t]); }
   assert('无摆动不触发', fired.length === 0, JSON.stringify(fired));
+}
+
+console.log('== 挥手：一趟来回（2 次反转）即触发 ==');
+{
+  const eng = makeEngine();
+  const fired = [];
+  const seq = [[NEUTRAL, 0]];
+  // 右手举起，只挥一趟：右→左→右（2 次反转，旧阈值 3 会失败）
+  const xs = [0.6, 0.72, 0.6, 0.72];
+  for (let i = 0; i < xs.length; i++) {
+    seq.push([{ ...NEUTRAL, 15: [0.4, 0.65, 1], 16: [xs[i], 0.4, 1] }, 1000 + i * 100]);
+  }
+  for (const f of frames(seq)) { const g = eng.update(mk(f.pts), f.t); if (g) fired.push([g, f.t]); }
+  assert('2 次反转即触发', fired.length === 1 && fired[0][0] === 'wave', JSON.stringify(fired));
+}
+
+console.log('== 挥手：另一手略低（0.55，旧逻辑需>0.6）仍可触发 ==');
+{
+  const eng = makeEngine();
+  const fired = [];
+  const seq = [[NEUTRAL, 0]];
+  // 左腕 0.55：仅比肩低 0.05，旧前提（需 >肩+0.1=0.6）会破坏，新容差（>-0.05）通过
+  const xs = [0.6, 0.63, 0.6, 0.63];
+  for (let i = 0; i < xs.length; i++) {
+    seq.push([{ ...NEUTRAL, 15: [0.48, 0.55, 1], 16: [xs[i], 0.4, 1] }, 1000 + i * 100]);
+  }
+  for (const f of frames(seq)) { const g = eng.update(mk(f.pts), f.t); if (g) fired.push([g, f.t]); }
+  assert('宽松容差下触发', fired.length === 1 && fired[0][0] === 'wave', JSON.stringify(fired));
 }
 
 console.log('== 双手上举 ==');
