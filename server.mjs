@@ -16,6 +16,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import sharp from 'sharp';
+import https from 'https';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -154,3 +155,21 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[photos-wall] 服务已启动: http://0.0.0.0:${PORT}`);
   console.log(`[photos-wall] 管理后台: http://<IP>:${PORT}/#/admin`);
 });
+
+// ---------- 可选 HTTPS（局域网测试用） ----------
+// 摄像头 API (getUserMedia) 只在安全上下文（HTTPS/localhost）可用。
+// 本机 kiosk 用 localhost 不受影响；B 机等局域网设备测试需 HTTPS。
+// 证书: deploy/certs/cert.pem + key.pem（自签，脚本见 deploy/gen-certs.sh）
+const CERT_FILE = path.join(__dirname, 'deploy', 'certs', 'cert.pem');
+const KEY_FILE = path.join(__dirname, 'deploy', 'certs', 'key.pem');
+if (fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE)) {
+  const HTTPS_PORT = Number(process.env.HTTPS_PORT || 8443);
+  https
+    .createServer(
+      { cert: fs.readFileSync(CERT_FILE), key: fs.readFileSync(KEY_FILE) },
+      app,
+    )
+    .listen(HTTPS_PORT, '0.0.0.0', () => {
+      console.log(`[photos-wall] HTTPS 已启动: https://0.0.0.0:${HTTPS_PORT}（自签证书，浏览器需手动信任）`);
+    });
+}

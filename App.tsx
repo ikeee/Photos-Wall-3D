@@ -142,7 +142,11 @@ const App: React.FC = () => {
       onReady: () => setCameraState('ready'),
       onError: (e) => {
         setCameraState('error');
-        setCameraError(String(e?.message || e || '摄像头不可用'));
+        // 安全上下文提示：getUserMedia 仅 HTTPS/localhost 可用
+        const hint = !window.isSecureContext
+          ? '（摄像头需 HTTPS 或 localhost：局域网测试请用 https://<IP>:8443/ 并信任自签证书）'
+          : '';
+        setCameraError(String(e?.message || e || '摄像头不可用') + hint);
       },
       onResult: (r) => onResultRef.current(r),
     });
