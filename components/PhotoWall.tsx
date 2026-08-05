@@ -21,8 +21,19 @@ function computeLayout(photos: PhotoItem[], layout: LayoutMode) {
   const R = APP_CONFIG.wallRadius;
   const dummy = new THREE.Object3D();
 
+  // 立方体 6 个面基向量：dir=面法线，u/v=面内坐标轴（2026-08-05 替代螺旋）
+  const CUBE_FACES = [
+    { dir: [1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] },
+    { dir: [-1, 0, 0], u: [0, 1, 0], v: [0, 0, -1] },
+    { dir: [0, 1, 0], u: [1, 0, 0], v: [0, 0, -1] },
+    { dir: [0, -1, 0], u: [1, 0, 0], v: [0, 0, 1] },
+    { dir: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] },
+    { dir: [0, 0, -1], u: [-1, 0, 0], v: [0, 1, 0] },
+  ] as const;
+
   return photos.map((p, i) => {
-    let x: number, y: number, z: number;
+    let x = 0, y = 0, z = 0;
+    let lookAtX = 0, lookAtY = 0, lookAtZ = 0; // 默认朝向中心
 
     if (layout === 'sphere') {
       // 斐波那契球面均匀分布
@@ -31,27 +42,44 @@ function computeLayout(photos: PhotoItem[], layout: LayoutMode) {
       x = R * Math.cos(theta) * Math.sin(phi);
       y = R * Math.sin(theta) * Math.sin(phi);
       z = R * Math.cos(phi);
-    } else if (layout === 'helix') {
-      // 螺旋柱
-      const t = i / Math.max(count - 1, 1);
-      const angle = t * Math.PI * 8;
-      const r = R * (0.55 + 0.45 * Math.abs(Math.sin(t * Math.PI)));
-      x = r * Math.cos(angle);
-      y = (t - 0.5) * R * 1.6;
-      z = r * Math.sin(angle);
+    } else if (layout === 'cube') {
+      // 立方体：6 个面网格排布，卡片朝外（替代原螺旋）
+      const perFace = Math.ceil(count / 6);
+      const cols = Math.ceil(Math.sqrt(perFace));
+      const rows = Math.ceil(perFace / cols);
+      const spacing = 2.6;
+      const S = Math.max(cols, rows) * spacing + 2; // 边长随照片数自适应
+      const face = Math.min(Math.floor(i / perFace), 5);
+      const idx = i % perFace;
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      const f = CUBE_FACES[face];
+      const uOff = (col - (cols - 1) / 2) * spacing;
+      const vOff = (row - (rows - 1) / 2) * spacing;
+      x = f.dir[0] * S / 2 + f.u[0] * uOff + f.v[0] * vOff;
+      y = f.dir[1] * S / 2 + f.u[1] * uOff + f.v[1] * vOff;
+      z = f.dir[2] * S / 2 + f.u[2] * uOff + f.v[2] * vOff;
+      lookAtX = f.dir[0] * S;
+      lookAtY = f.dir[1] * S;
+      lookAtZ = f.dir[2] * S;
     } else {
-      // plane：网格墙
-      const cols = Math.ceil(Math.sqrt(count * 1.4));
+      // waterfall：多列瀑布，卡片面向观察者（替代原平面）
+      const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count / 2))));
+      const rowGap = 2.2, colGap = 2.8;
+      const rows = Math.ceil(count / cols);
       const col = i % cols;
       const row = Math.floor(i / cols);
-      const spacing = 2.2;
-      x = (col - (cols - 1) / 2) * spacing;
-      y = (row - (Math.ceil(count / cols) - 1) / 2) * spacing;
-      z = 0;
+      // 稳定伪随机（瀑布错落感，不随时间变化）
+      const h = Math.sin(i * 127.1 + col * 311.7) * 43758.5453;
+      const jitter = h - Math.floor(h);
+      x = (col - (cols - 1) / 2) * colGap + (jitter - 0.5) * 0.5;
+      y = ((rows - 1) / 2 - row) * rowGap + (jitter - 0.5) * 0.3;
+      z = (jitter - 0.5) * 0.8;
+      lookAtZ = 10; // 全部面向观察者
     }
 
     dummy.position.set(x, y, z);
-    dummy.lookAt(0, 0, 0);
+    dummy.lookAt(lookAtX, lookAtY, lookAtZ);
 
     return {
       id: p.id,

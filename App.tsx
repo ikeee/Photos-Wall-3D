@@ -73,7 +73,7 @@ const App: React.FC = () => {
     if (g === 'arms_spread') {
       triggerRandomFocus();
     } else if (g === 'wave') {
-      setLayout((prev) => (prev === 'sphere' ? 'helix' : prev === 'helix' ? 'plane' : 'sphere'));
+      setLayout((prev) => (prev === 'sphere' ? 'cube' : prev === 'cube' ? 'waterfall' : 'sphere'));
       setLastGesture('WAVE → LAYOUT');
     } else if (g === 'hands_up') {
       setBurstUntil(Date.now() + APP_CONFIG.burstDurationMs);
