@@ -32,6 +32,17 @@ npm run dev            # Vite 开发服务器 :3000（/api 代理到 8787）
 
 访问 `http://<IP>:3000`。管理后台 `http://<IP>:3000/#/admin`（Token 见 `data/.admin_token`）。
 
+## 🔐 HTTPS 测试证书
+
+局域网设备需要使用 HTTPS 时，在本机运行：
+
+```bash
+bash deploy/gen-certs.sh
+```
+
+生成的 `deploy/certs/` 已被 `.gitignore` 排除。不要提交证书或私钥；如果私钥曾经公开，
+应在部署设备上重新生成，并把旧私钥视为已泄露。
+
 ## 📦 部署（OrangePi + LED 屏）
 
 ```bash
